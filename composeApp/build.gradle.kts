@@ -2,6 +2,9 @@ import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.targets.js.webpack.KotlinWebpackConfig
+import java.util.Properties
+import java.io.FileInputStream
+
 
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
@@ -9,6 +12,7 @@ plugins {
     alias(libs.plugins.composeMultiplatform)
     alias(libs.plugins.composeCompiler)
     alias(libs.plugins.kotlin.serialization)
+    id("com.github.gmazzo.buildconfig") version "5.5.2"
 }
 repositories {
     google()
@@ -23,14 +27,56 @@ repositories {
     maven("https://jitpack.io")
 }
 
+// Charger les propriétés du fichier secret.properties
+val secretPropertiesFile = rootProject.file("secret.properties")
+val secretProperties = Properties()
+if (secretPropertiesFile.exists()) {
+    secretProperties.load(FileInputStream(secretPropertiesFile))
+} else {
+    secretProperties["baseUrl"] = "https://api.openweathermap.org/data/2.5"
+    secretProperties["apiKey"] = "PLEASE_ADD_YOUR_API_KEY"
+}
+
+// Tâche pour générer le fichier de configuration
+tasks.register("generateConfig") {
+    val configFile = file("${projectDir}/src/commonMain/kotlin/org/perso/weatherapp/network/Config.kt")
+
+    doLast {
+        configFile.parentFile.mkdirs()
+        configFile.writeText("""
+            package org.perso.weatherapp.network
+
+            // Ce fichier est généré automatiquement. Ne pas modifier directement.
+            object Config {
+                const val BASE_URL = "${secretProperties["baseUrl"]}"
+                const val API_KEY = "${secretProperties["apiKey"]}"
+            }
+        """.trimIndent())
+    }
+}
+
+// Configuration des dépendances des tâches de compilation
+tasks.named("preBuild").configure {
+    dependsOn("generateConfig")
+}
+
 kotlin {
     androidTarget {
         compilerOptions {
             jvmTarget.set(JvmTarget.JVM_11)
         }
+        compilations.all {
+            compileTaskProvider.get().dependsOn("generateConfig")
+        }
+
     }
     
-    jvm("desktop")
+    jvm("desktop") {
+        compilations.all {
+            compileTaskProvider.get().dependsOn("generateConfig")
+        }
+
+    }
     
     @OptIn(ExperimentalWasmDsl::class)
     wasmJs {
@@ -49,6 +95,10 @@ kotlin {
                 }
             }
         }
+        compilations.all {
+            compileTaskProvider.get().dependsOn("generateConfig")
+        }
+
         binaries.executable()
     }
     
@@ -75,6 +125,7 @@ kotlin {
             implementation(libs.ktor.client.content.negotiation)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.datetime)
+
         }
         desktopMain.dependencies {
             implementation(compose.desktop.currentOs)
@@ -95,6 +146,10 @@ android {
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = 1
         versionName = "1.0"
+
+        buildConfigField("String", "BASE_URL", "\"${secretProperties["baseUrl"]}\"")
+        buildConfigField("String", "API_KEY", "\"${secretProperties["apiKey"]}\"")
+
     }
     packaging {
         resources {
@@ -106,6 +161,10 @@ android {
             isMinifyEnabled = false
         }
     }
+    buildFeatures {
+        buildConfig = true
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -119,6 +178,12 @@ dependencies {
 compose.desktop {
     application {
         mainClass = "org.perso.weatherapp.MainKt"
+
+        args += listOf(
+            "-DbaseUrl=${secretProperties["baseUrl"]}",
+            "-DapiKey=${secretProperties["apiKey"]}"
+        )
+
 
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
